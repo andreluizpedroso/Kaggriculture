@@ -84,3 +84,22 @@ CLONE_SIMILARITY_THRESHOLD = 0.85
 CLONE_PREEMPT_TURNS = 2
 
 MAX_MARKET_ORDERS_PER_TURN = 10
+
+# Cap total animals owned (placed + sitting in shed) so the agent doesn't
+# buy more mouths to feed than its current labor/cash can sustain -- an
+# unfed animal that flees after 2 days is a pure loss of its purchase cost.
+MAX_ANIMALS = 3
+
+# Keep this many seeds of the current target crop in stock at once. Buying
+# only 1 at a time throttled planting to roughly one new plant per
+# purchase-notice-walk-plant cycle, which couldn't keep up once land grew
+# to 100 tiles -- most of the farm sat empty for lack of seed backlog.
+# Scales with how many quadrants are unlocked (more land -> more units
+# working it -> need a bigger backlog so nobody stalls waiting on seed).
+# CASH_RESERVE below still stops this from starving hiring/wheat/land.
+SEED_BUFFER_PER_QUADRANT = 6
+
+# Never let an opportunistic purchase (seed top-up, land, a new animal --
+# anything that isn't survival-critical wheat) drop the bank below this,
+# so a run of bad luck doesn't leave the agent unable to react.
+CASH_RESERVE = 150

@@ -6,3 +6,7 @@ __pycache__/
 # Internal working docs -- not meant for the public repo.
 CLAUDE.md
 PROGRESS.md
+
+# Third-party reference agents pulled from Kaggle for local sparring only --
+# not ours to redistribute, kept local for benchmarking.
+reference_agents/

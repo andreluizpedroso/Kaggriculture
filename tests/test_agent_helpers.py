@@ -109,7 +109,7 @@ def test_buy_wheat_only_tops_up_shortfall_not_flat_amount():
     assert wheat_orders[0][2] == 3
 
 
-def test_buy_animal_skipped_once_already_owned():
+def test_buy_animal_skipped_while_one_sits_unplaced_in_shed():
     me = {"money": 5000, "tiles": [[None] * 10 for _ in range(10)], "unlocked_quadrants": ["NW"], "hires_today": 0}
     prices = {"GOOSE": 300}
     shed_with_goose = {"GOOSE": 1}
@@ -119,6 +119,21 @@ def test_buy_animal_skipped_once_already_owned():
     shed_empty = {}
     buys2 = build_buy_orders(me, shed_empty, {}, "ROTATE_AND_COMPOUND", prices, None, "GOOSE", 0)
     assert any(o[0] == "BUY_ANIMAL" and o[1] == "GOOSE" for o in buys2)
+
+
+def test_buy_animal_allowed_again_once_previous_one_is_placed():
+    # Regression guard: an animal already placed on a tile (not sitting in
+    # the shed) must not block buying another of the same type -- this used
+    # to cap the whole game at exactly one animal per type forever.
+    me = {
+        "money": 5000,
+        "tiles": [[{"kind": "COOP", "animal": "GOOSE"}] + [None] * 9] + [[None] * 10 for _ in range(9)],
+        "unlocked_quadrants": ["NW"],
+        "hires_today": 0,
+    }
+    prices = {"GOOSE": 300}
+    buys = build_buy_orders(me, {}, {}, "ROTATE_AND_COMPOUND", prices, None, "GOOSE", 0)
+    assert any(o[0] == "BUY_ANIMAL" and o[1] == "GOOSE" for o in buys)
 
 
 def test_get_phase_boundaries():

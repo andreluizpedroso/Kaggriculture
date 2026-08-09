@@ -174,14 +174,6 @@ def build_sell_orders(shed, prices, phase, clone_like):
     return orders
 
 
-def _owned_animal_count(me, shed, animal):
-    placed = sum(
-        1 for row in me.get("tiles", []) for tile in row
-        if isinstance(tile, dict) and tile.get("animal") == animal
-    )
-    return placed + shed.get(animal, 0)
-
-
 def build_buy_orders(me, shed, seeds, phase, prices, target_crop, target_animal, market_orders_used):
     buys = []
     money = me.get("money", 0)
@@ -201,22 +193,43 @@ def build_buy_orders(me, shed, seeds, phase, prices, target_crop, target_animal,
             buys.append(["BUY_PRODUCT", "WHEAT", wheat_shortfall])
             budget_left -= cost
 
-    if phase != "CASH" and target_crop and seeds.get(target_crop, 0) == 0:
+    if phase != "CASH" and target_crop:
         seed_cost = cfg.CROPS[target_crop]["seed_cost"]
-        if seed_cost <= budget_left:
-            buys.append(["BUY_SEED", target_crop, 1])
-            budget_left -= seed_cost
+        num_quadrants = len(me.get("unlocked_quadrants", ["NW"]))
+        seed_buffer = cfg.SEED_BUFFER_PER_QUADRANT * num_quadrants
+        shortfall = max(0, seed_buffer - seeds.get(target_crop, 0))
+        spendable = max(0, budget_left - cfg.CASH_RESERVE)
+        affordable = min(shortfall, int(spendable // seed_cost)) if seed_cost > 0 else 0
+        if affordable > 0:
+            buys.append(["BUY_SEED", target_crop, affordable])
+            budget_left -= affordable * seed_cost
 
     if phase in ("ROTATE_AND_COMPOUND", "EXPAND") and target_animal:
-        # Only buy one at a time -- don't stack unplaced animals in the shed
-        # faster than a unit can build a structure and place them.
-        already_owned = _owned_animal_count(me, shed, target_animal)
+        # Buy one at a time, but keep buying across the game as each one
+        # gets placed -- only skip while one of this type is still sitting
+        # unplaced in the shed (don't stack faster than a unit can fetch
+        # and place them), and total owned (placed + shed) stays under
+        # MAX_ANIMALS so we don't buy more mouths than we can feed.
+        unplaced_in_shed = shed.get(target_animal, 0)
+        total_owned = sum(shed.get(a, 0) for a in cfg.ANIMALS) + sum(
+            1 for row in me.get("tiles", []) for tile in row
+            if isinstance(tile, dict) and tile.get("animal")
+        )
         animal_cost = cfg.ANIMALS[target_animal]["cost"]
-        if already_owned == 0 and animal_cost <= budget_left and money > animal_cost * 3:
+        if (
+            unplaced_in_shed == 0
+            and total_owned < cfg.MAX_ANIMALS
+            and animal_cost <= budget_left
+            and money > animal_cost * 3
+        ):
             buys.append(["BUY_ANIMAL", target_animal, 1])
             budget_left -= animal_cost
 
-    if phase == "EXPAND":
+    # Land is valuable whenever we can afford it, not just during EXPAND --
+    # BOOTSTRAP rarely has the cash, but ROTATE_AND_COMPOUND income was
+    # previously never spent on land once EXPAND's day window closed, which
+    # stranded the agent on 2 quadrants for the rest of the season.
+    if phase in ("EXPAND", "ROTATE_AND_COMPOUND"):
         unlocked = set(me.get("unlocked_quadrants", []))
         for quadrant in cfg.LAND_ORDER:
             if quadrant in unlocked:
@@ -229,7 +242,10 @@ def build_buy_orders(me, shed, seeds, phase, prices, target_crop, target_animal,
 
     if phase in ("BOOTSTRAP", "EXPAND", "ROTATE_AND_COMPOUND"):
         hires_today = me.get("hires_today", 0)
-        max_hires = {"BOOTSTRAP": 1, "EXPAND": 2, "ROTATE_AND_COMPOUND": 3}[phase]
+        # Scale labor with land -- buying more quadrants without more hands
+        # to work them just leaves most of the farm empty and neglected.
+        num_quadrants = len(me.get("unlocked_quadrants", ["NW"]))
+        max_hires = max(1, num_quadrants * 2)
         if hires_today < max_hires:
             fib_cost = _fib_hire_cost(hires_today)
             if fib_cost <= budget_left and money > fib_cost * 4:
@@ -327,7 +343,7 @@ def _resolve_at(pos, target, op_at_target):
     return [_step_toward(pos, target)]
 
 
-def _decide_unit(pos, inv, claimed, tasks, me, seeds, phase, target_crop, target_animal, day):
+def _decide_unit(pos, inv, claimed, tasks, me, seeds, shed, phase, target_crop, target_animal, day):
     x, y = pos
 
     # 1) Deliver a carried harvest/product to the shed.
@@ -399,6 +415,23 @@ def _decide_unit(pos, inv, claimed, tasks, me, seeds, phase, target_crop, target
     if nearest:
         return [_step_toward(pos, nearest)]
 
+    # 6b) A purchased animal is waiting in the shed with a free matching
+    # structure -- fetch it now. Below survival tasks and harvest/fertilizer
+    # (those are irreversible-loss-prevention or produce income right away),
+    # but above weeding/planting: money is already spent on it and it earns
+    # nothing until placed. `("ANIMAL", name)` keys never collide with the
+    # (x, y) tile keys also stored in `claimed`.
+    for animal, info in cfg.ANIMALS.items():
+        claim_key = ("ANIMAL", animal)
+        if claim_key in claimed:
+            continue
+        if shed.get(animal, 0) > 0 and _find_free_structure(me, info["structure"]):
+            shed_tile = _nearest_shed_tile(pos)
+            if tuple(pos) == shed_tile:
+                claimed.add(claim_key)
+                return ["PICKUP", animal, 1]
+            return [_step_toward(pos, shed_tile)]
+
     # 7) Clear weeds blocking new planting.
     for t in tasks["weed"]:
         if t in claimed:
@@ -435,11 +468,6 @@ def _decide_unit(pos, inv, claimed, tasks, me, seeds, phase, target_crop, target
             nearest = _nearest_unclaimed(pos, tasks["empty"], claimed)
             if nearest:
                 return [_step_toward(pos, nearest)]
-
-    # 10) Pick up a purchased animal waiting in the shed (bought via BUY_ANIMAL
-    # this or an earlier turn) so a later turn can carry it to a structure.
-    # (Falls through to PASS here; the top-level agent() nudges a PASSing
-    # farmer toward the shed to fetch it -- see agent().)
 
     return ["PASS"]
 
@@ -501,7 +529,7 @@ def agent(obs):
     farmer_pos = tuple(me["farmer"])
     farmer_inv = inventories[0] if inventories else {}
     farmer_action = _decide_unit(
-        farmer_pos, farmer_inv, claimed, tasks, me, seeds, phase, target_crop, target_animal, day
+        farmer_pos, farmer_inv, claimed, tasks, me, seeds, shed, phase, target_crop, target_animal, day
     )
 
     hands_actions = []
@@ -509,27 +537,12 @@ def agent(obs):
         hand_inv = inventories[i + 1] if i + 1 < len(inventories) else {}
         hands_actions.append(
             _decide_unit(
-                tuple(hand_pos), hand_inv, claimed, tasks, me, seeds, phase, target_crop, target_animal, day
+                tuple(hand_pos), hand_inv, claimed, tasks, me, seeds, shed, phase, target_crop, target_animal, day
             )
         )
 
     sells = build_sell_orders(shed, prices, phase, clone_like)
     buys = build_buy_orders(me, shed, seeds, phase, prices, target_crop, target_animal, len(sells))
     market_orders = (sells + buys)[: cfg.MAX_MARKET_ORDERS_PER_TURN]
-
-    # If we bought an animal this turn but nobody is fetching it yet,
-    # nudge an idle-ish unit (farmer, cheaply) toward the shed next turn --
-    # handled naturally since PICKUP happens once the animal is in the shed
-    # and a unit has nothing else to do (step 8/9 above fall through to PASS
-    # near the shed, at which point PICKUP is attempted below).
-    if farmer_action == ["PASS"]:
-        for animal in cfg.ANIMALS:
-            if shed.get(animal, 0) > 0:
-                shed_tile = _nearest_shed_tile(farmer_pos)
-                if farmer_pos == shed_tile:
-                    farmer_action = ["PICKUP", animal, 1]
-                else:
-                    farmer_action = [_step_toward(farmer_pos, shed_tile)]
-                break
 
     return {"farmer": farmer_action, "hands": hands_actions, "market": market_orders}
