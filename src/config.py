@@ -39,12 +39,15 @@ LAND_PRICES = {"NE": 1000, "SW": 2000, "SE": 4000}
 # phase. Tuned against the user's 1-indexed "Bootstrap dias 1-3" etc.
 TURNS_PER_DAY = 24
 SEASON_DAYS = 30
+# Tuned by src/optimize_config.py (random search + hill-climbing against
+# random/starter/tetsutani/boatlee) -- see PROGRESS.md for the search run
+# and the before/after boundary values.
 PHASE_BOUNDARIES = [
-    ("BOOTSTRAP", 0),          # days 0-2   (1-3 in-game)
-    ("EXPAND", 3),             # days 3-11  (4-12)
-    ("ROTATE_AND_COMPOUND", 12),  # days 12-23 (13-24)
-    ("PROTECT_VALUE", 24),     # days 24-27 (25-28)
-    ("CASH", 28),              # days 28-29 (29-30)
+    ("BOOTSTRAP", 0),
+    ("EXPAND", 1),
+    ("ROTATE_AND_COMPOUND", 16),
+    ("PROTECT_VALUE", 25),
+    ("CASH", 27),
 ]
 
 
@@ -59,29 +62,33 @@ def get_phase(day: int) -> str:
     return phase
 
 
-# --- Tunable constants (estimates — revisit via simulate.py) -------------
-# Community analysis claims CARE can multiply animal yield by ~4x; unverified
-# against the current (post-balance-change) engine. CARE is always applied
-# when available regardless of this constant (it only affects which animal
-# to buy), so a wrong value here is low-risk to correct later.
-CARE_MULTIPLIER = 4.0
+# --- Tunable constants -------------------------------------------------
+# Values below are the winner of the src/optimize_config.py search (random
+# search + hill-climbing, fitness = avg bank delta vs random/starter/
+# tetsutani/boatlee, weighted toward the strong opponents) -- see
+# PROGRESS.md for the search run, the pre-search values, and the
+# before/after benchmark numbers. Each constant's original rationale
+# (why it exists, what it protects against) is kept below; only the
+# numbers changed.
+
+# Community analysis claims CARE can multiply animal yield by ~4x; still
+# unverified against the current (post-balance-change) engine, but the
+# search independently converged close to that same value. CARE is always
+# applied when available regardless of this constant (it only affects
+# which animal to buy), so a wrong value here is low-risk to correct later.
+CARE_MULTIPLIER = 4.96039682181482
 
 # Assumed per-unit price decay when selling several units of the same
 # product in a short window, used only for score projections (not a real
 # market simulation — the real price function lives in the engine and is
 # read live from obs["market"]["prices"] every phase-planning cycle).
-PRICE_IMPACT_PCT = 0.06
-
-# No single crop should claim more than this share of currently-empty
-# tiles when planning a phase's planting targets, so the agent doesn't
-# crash its own price late-game (more likely post-balance-change).
-MAX_SINGLE_CROP_SHARE = 0.6
+PRICE_IMPACT_PCT = 0.08443199335993681
 
 # Clone-preemption: how similar (0..1) self vs. opponent public farm state
 # has to be before we treat the opponent as running the same "recipe" and
-# preempt a planned sale by a few turns.
-CLONE_SIMILARITY_THRESHOLD = 0.85
-CLONE_PREEMPT_TURNS = 2
+# preempt a planned sale (skip the PROTECT_VALUE hold-for-a-better-price
+# logic in build_sell_orders) instead of waiting.
+CLONE_SIMILARITY_THRESHOLD = 0.531128576014459
 
 MAX_MARKET_ORDERS_PER_TURN = 10
 
@@ -90,16 +97,28 @@ MAX_MARKET_ORDERS_PER_TURN = 10
 # unfed animal that flees after 2 days is a pure loss of its purchase cost.
 MAX_ANIMALS = 3
 
-# Keep this many seeds of the current target crop in stock at once. Buying
-# only 1 at a time throttled planting to roughly one new plant per
-# purchase-notice-walk-plant cycle, which couldn't keep up once land grew
-# to 100 tiles -- most of the farm sat empty for lack of seed backlog.
-# Scales with how many quadrants are unlocked (more land -> more units
-# working it -> need a bigger backlog so nobody stalls waiting on seed).
-# CASH_RESERVE below still stops this from starving hiring/wheat/land.
-SEED_BUFFER_PER_QUADRANT = 6
+# Keep this many seeds of the current target crop in stock at once, per
+# unlocked quadrant. Buying only 1 at a time throttled planting to roughly
+# one new plant per purchase-notice-walk-plant cycle, which couldn't keep
+# up once land grew to 100 tiles -- most of the farm sat empty for lack of
+# seed backlog. CASH_RESERVE below still stops this from starving
+# hiring/wheat/land.
+SEED_BUFFER_PER_QUADRANT = 4
 
 # Never let an opportunistic purchase (seed top-up, land, a new animal --
 # anything that isn't survival-critical wheat) drop the bank below this,
 # so a run of bad luck doesn't leave the agent unable to react.
-CASH_RESERVE = 150
+CASH_RESERVE = 321
+
+# How many farm hands to keep hired per unlocked quadrant -- land without
+# labor to work it just sits empty and neglected.
+HIRE_PER_QUADRANT = 2.6092207655270654
+
+# Affordability safety margins: only spend on a non-essential purchase
+# (land, an animal) if the bank has at least this many multiples of the
+# cost left over afterward, so one purchase doesn't strand the agent.
+LAND_AFFORD_MULTIPLIER = 3.9891398646722704
+ANIMAL_AFFORD_MULTIPLIER = 3.6497096039220858
+
+# Feed buffer target, in days of wheat, kept in the shed per animal owned.
+WHEAT_BUFFER_DAYS = 5

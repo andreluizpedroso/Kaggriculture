@@ -101,12 +101,12 @@ def test_buy_wheat_only_tops_up_shortfall_not_flat_amount():
     buys = build_buy_orders(me, shed_full, {}, "ROTATE_AND_COMPOUND", prices, None, None, 0)
     assert not any(o[0] == "BUY_PRODUCT" and o[1] == "WHEAT" for o in buys)
 
-    # Empty shed -- must buy exactly the buffer shortfall (3 per animal, 1 animal).
+    # Empty shed -- must buy exactly the buffer shortfall (WHEAT_BUFFER_DAYS per animal, 1 animal).
     shed_empty = {"WHEAT": 0}
     buys2 = build_buy_orders(me, shed_empty, {}, "ROTATE_AND_COMPOUND", prices, None, None, 0)
     wheat_orders = [o for o in buys2 if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"]
     assert len(wheat_orders) == 1
-    assert wheat_orders[0][2] == 3
+    assert wheat_orders[0][2] == cfg.WHEAT_BUFFER_DAYS
 
 
 def test_buy_animal_skipped_while_one_sits_unplaced_in_shed():
@@ -137,16 +137,15 @@ def test_buy_animal_allowed_again_once_previous_one_is_placed():
 
 
 def test_get_phase_boundaries():
-    assert cfg.get_phase(0) == "BOOTSTRAP"
-    assert cfg.get_phase(2) == "BOOTSTRAP"
-    assert cfg.get_phase(3) == "EXPAND"
-    assert cfg.get_phase(11) == "EXPAND"
-    assert cfg.get_phase(12) == "ROTATE_AND_COMPOUND"
-    assert cfg.get_phase(23) == "ROTATE_AND_COMPOUND"
-    assert cfg.get_phase(24) == "PROTECT_VALUE"
-    assert cfg.get_phase(27) == "PROTECT_VALUE"
-    assert cfg.get_phase(28) == "CASH"
-    assert cfg.get_phase(29) == "CASH"
+    # Reads the boundary days straight from config.PHASE_BOUNDARIES rather
+    # than hardcoding them here, so retuning (e.g. via optimize_config.py)
+    # doesn't require touching this test.
+    boundaries = cfg.PHASE_BOUNDARIES
+    for i, (name, start_day) in enumerate(boundaries):
+        end_day = boundaries[i + 1][1] - 1 if i + 1 < len(boundaries) else 29
+        assert cfg.get_phase(start_day) == name
+        if end_day >= start_day:
+            assert cfg.get_phase(end_day) == name
 
 
 def _empty_farm(money=1000):

@@ -185,8 +185,8 @@ def build_buy_orders(me, shed, seeds, phase, prices, target_crop, target_animal,
     )
     if num_animals > 0:
         wheat_price = prices.get("WHEAT", cfg.CROPS["WHEAT"]["base_price"])
-        # Keep a ~3-day feed buffer per animal; top up the shortfall only.
-        wheat_buffer_target = num_animals * 3
+        # Keep a feed buffer per animal; top up the shortfall only.
+        wheat_buffer_target = num_animals * cfg.WHEAT_BUFFER_DAYS
         wheat_shortfall = max(0, wheat_buffer_target - shed.get("WHEAT", 0))
         cost = wheat_shortfall * wheat_price
         if wheat_shortfall > 0 and cost <= budget_left:
@@ -220,7 +220,7 @@ def build_buy_orders(me, shed, seeds, phase, prices, target_crop, target_animal,
             unplaced_in_shed == 0
             and total_owned < cfg.MAX_ANIMALS
             and animal_cost <= budget_left
-            and money > animal_cost * 3
+            and money > animal_cost * cfg.ANIMAL_AFFORD_MULTIPLIER
         ):
             buys.append(["BUY_ANIMAL", target_animal, 1])
             budget_left -= animal_cost
@@ -235,7 +235,7 @@ def build_buy_orders(me, shed, seeds, phase, prices, target_crop, target_animal,
             if quadrant in unlocked:
                 continue
             price = cfg.LAND_PRICES[quadrant]
-            if price <= budget_left and money > price * 2:
+            if price <= budget_left and money > price * cfg.LAND_AFFORD_MULTIPLIER:
                 buys.append(["BUY_LAND"])
                 budget_left -= price
             break
@@ -245,7 +245,7 @@ def build_buy_orders(me, shed, seeds, phase, prices, target_crop, target_animal,
         # Scale labor with land -- buying more quadrants without more hands
         # to work them just leaves most of the farm empty and neglected.
         num_quadrants = len(me.get("unlocked_quadrants", ["NW"]))
-        max_hires = max(1, num_quadrants * 2)
+        max_hires = max(1, int(num_quadrants * cfg.HIRE_PER_QUADRANT))
         if hires_today < max_hires:
             fib_cost = _fib_hire_cost(hires_today)
             if fib_cost <= budget_left and money > fib_cost * 4:
