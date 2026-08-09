@@ -364,23 +364,41 @@ def _decide_unit(pos, inv, claimed, tasks, me, seeds, shed, phase, target_crop, 
                     return ["PLACE", animal]
                 return [_step_toward(pos, structure)]
 
-    # 3) Hard prevention: water / feed.
+    # 3a) Hard prevention: water (no inventory item consumed, just standing
+    # on the tile).
     for t in tasks["water"]:
         if t in claimed:
             continue
         if pos == t:
             claimed.add(t)
             return ["WATER"]
-    for t in tasks["feed"]:
-        if t in claimed:
-            continue
-        if pos == t:
-            claimed.add(t)
-            return ["FEED"]
-
-    nearest = _nearest_unclaimed(pos, tasks["water"] + tasks["feed"], claimed)
+    nearest = _nearest_unclaimed(pos, tasks["water"], claimed)
     if nearest:
         return [_step_toward(pos, nearest)]
+
+    # 3b) Hard prevention: feed. Unlike WATER, FEED consumes WHEAT from the
+    # *unit's own inventory* (not the shed) -- a unit with no wheat on hand
+    # must fetch some from the shed first, or every FEED silently no-ops
+    # and animals starve after 2 missed days regardless of how much wheat
+    # sits in storage. (Confirmed against the engine source: BUY_PRODUCT
+    # deposits into the shed, and FEED calls `_inv_take(inv, "WHEAT", 1)`
+    # on the acting unit's own inventory.)
+    if tasks["feed"]:
+        if inv.get("WHEAT", 0) > 0:
+            for t in tasks["feed"]:
+                if t in claimed:
+                    continue
+                if pos == t:
+                    claimed.add(t)
+                    return ["FEED"]
+            nearest = _nearest_unclaimed(pos, tasks["feed"], claimed)
+            if nearest:
+                return [_step_toward(pos, nearest)]
+        else:
+            shed_tile = _nearest_shed_tile(pos)
+            if tuple(pos) == shed_tile:
+                return ["PICKUP", "WHEAT", len(tasks["feed"])]
+            return [_step_toward(pos, shed_tile)]
 
     # 4) CARE.
     for t in tasks["care"]:
