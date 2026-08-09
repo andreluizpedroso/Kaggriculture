@@ -8,6 +8,8 @@ cheap to check without spinning up kaggle_environments.
 
 from src import config as cfg
 from src.agent import (
+    _max_batch_within_impact,
+    _projected_batch_revenue,
     build_buy_orders,
     build_sell_orders,
     is_clone_like,
@@ -16,25 +18,60 @@ from src.agent import (
 )
 
 
+def test_market_price_matches_reference_table():
+    # Spot-check against the README's Price Function reference table
+    # (P(I0-T), P(I0+T), P(I0+2T)) -- confirms our copy of the formula in
+    # config.py matches the installed engine's, not just "looks similar".
+    assert cfg.market_price("MELON", cfg.MARKET_I0) == 250
+    assert cfg.market_price("MELON", cfg.MARKET_I0 - 300) == 300
+    assert cfg.market_price("MELON", cfg.MARKET_I0 + 300) == 1
+    assert cfg.market_price("WHEAT", cfg.MARKET_I0 - 400) == 45
+    assert cfg.market_price("WHEAT", cfg.MARKET_I0 + 400) == 20
+    assert cfg.market_price("WHEAT", cfg.MARKET_I0 + 800) == 19
+
+
+def test_projected_batch_revenue_reflects_falling_price_as_batch_grows():
+    # SELL adds to market inventory (confirmed against the engine's
+    # _commit_unit), which is what drags the price down as a batch grows.
+    # Melon's price curve is quadratic and steep, but flat enough near I0
+    # that a tiny batch (a few units) doesn't move the rounded price at
+    # all -- use a batch large enough to show real decay.
+    single = _projected_batch_revenue("MELON", cfg.MARKET_I0, 1)
+    fifty = _projected_batch_revenue("MELON", cfg.MARKET_I0, 50)
+    assert fifty < single * 50
+    assert fifty > 0
+
+
+def test_max_batch_within_impact_caps_large_batches():
+    # A small batch shouldn't move melon's steep quadratic price curve
+    # enough to trip the cap; a large one should.
+    assert _max_batch_within_impact("MELON", cfg.MARKET_I0, 5) == 5
+    capped = _max_batch_within_impact("MELON", cfg.MARKET_I0, 500)
+    assert 0 < capped < 500
+
+
 def test_score_crop_prefers_higher_price():
-    low = {"WHEAT": 20}
-    high = {"WHEAT": 60}
-    assert score_crop("WHEAT", high) > score_crop("WHEAT", low)
+    # score_crop projects revenue from real market inventory (via
+    # cfg.market_price), not the `prices` spot value directly -- inventory
+    # below I0 means scarcity (price above base), above I0 means glut
+    # (price below base).
+    scarce = {"WHEAT": cfg.MARKET_I0 - 300}
+    glutted = {"WHEAT": cfg.MARKET_I0 + 300}
+    assert score_crop("WHEAT", {}, scarce) > score_crop("WHEAT", {}, glutted)
 
 
 def test_score_crop_ranking_shifts_with_price():
-    # At base prices, melon (seed 80, base 250) should out-score wheat
-    # (seed 10, base 25) on a profit-per-day basis.
-    base_prices = {c: info["base_price"] for c, info in cfg.CROPS.items()}
-    assert score_crop("MELON", base_prices) > score_crop("WHEAT", base_prices)
+    # At I0 (base price) for both, melon (seed 80, base 250) should
+    # out-score wheat (seed 10, base 25) on a profit-per-day basis.
+    at_i0 = {"WHEAT": cfg.MARKET_I0, "MELON": cfg.MARKET_I0}
+    assert score_crop("MELON", {}, at_i0) > score_crop("WHEAT", {}, at_i0)
 
-    # If wheat's price triples while melon crashes to the floor, wheat
-    # should overtake melon -- the score must actually react to live prices,
-    # not just the static base table.
-    skewed_prices = dict(base_prices)
-    skewed_prices["WHEAT"] = 90
-    skewed_prices["MELON"] = 1
-    assert score_crop("WHEAT", skewed_prices) > score_crop("MELON", skewed_prices)
+    # If wheat is scarce (price up) while melon is heavily glutted (price
+    # crashed near the floor), wheat should overtake melon -- the score
+    # must actually react to real market inventory, not just the static
+    # base table.
+    skewed = {"WHEAT": cfg.MARKET_I0 - 400, "MELON": cfg.MARKET_I0 + 3000}
+    assert score_crop("WHEAT", {}, skewed) > score_crop("MELON", {}, skewed)
 
 
 def test_score_animal_reacts_to_product_price():
@@ -53,6 +90,26 @@ def test_build_sell_orders_only_sells_positive_stock():
     assert "EGG" in items_sold
     assert "CARROT" not in items_sold
     assert all(o[0] == "SELL" for o in orders)
+
+
+def test_build_sell_orders_caps_batch_using_real_price_formula():
+    shed = {"MELON": 500}
+    prices = {"MELON": cfg.CROPS["MELON"]["base_price"]}
+    inventory = {"MELON": cfg.MARKET_I0}
+
+    # No inventory given -- falls back to selling everything (old behavior,
+    # e.g. for callers/tests that don't track market inventory).
+    uncapped = build_sell_orders(shed, prices, phase="ROTATE_AND_COMPOUND", clone_like=False)
+    assert uncapped == [["SELL", "MELON", 500]]
+
+    # With inventory given, the batch is capped so this turn's sale alone
+    # doesn't crash melon's steep price curve past MAX_SELL_PRICE_IMPACT_FRAC.
+    capped = build_sell_orders(shed, prices, phase="ROTATE_AND_COMPOUND", clone_like=False, inventory=inventory)
+    assert 0 < capped[0][2] < 500
+
+    # Cash phase liquidates regardless of impact -- unsold stock doesn't count.
+    liquidated = build_sell_orders(shed, prices, phase="CASH", clone_like=False, inventory=inventory)
+    assert liquidated == [["SELL", "MELON", 500]]
 
 
 def test_build_sell_orders_holds_crashed_premium_goods_in_protect_value():

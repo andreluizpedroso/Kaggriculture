@@ -65,42 +65,61 @@ def _nearest_shed_tile(pos, board_size=10):
 # --------------------------------------------------------------------------
 # Scoring
 # --------------------------------------------------------------------------
+# Batch revenue is projected with the engine's real price formula
+# (cfg.market_price, copied verbatim from the installed source) instead of
+# a flat guessed decay -- the engine processes a multi-unit SELL order one
+# unit at a time, each unit nudging inventory (and therefore price) before
+# the next is quoted, so simulating that sequence gives an exact answer
+# instead of an approximation.
 
-def _price_impact_discount(n_units):
-    """Cheap heuristic: each extra unit sold in the same batch is worth less."""
-    return sum((1 - cfg.PRICE_IMPACT_PCT) ** i for i in range(n_units))
+def _projected_batch_revenue(item, market_inventory, n_units):
+    """Revenue for selling `n_units` of `item` in one batch, starting from
+    `market_inventory`, simulated unit-by-unit exactly like the engine.
+    SELL *adds* to market inventory (you're supplying the market), which is
+    what pushes the price down as a batch grows -- confirmed against the
+    engine's `_commit_unit`. A sale at the $1 floor doesn't add supply
+    (matches the engine's `if price > 1: market["inventory"][item] += 1`),
+    so the price stays pinned at the floor instead of self-correcting."""
+    total = 0
+    inv = market_inventory
+    for _ in range(max(0, int(n_units))):
+        price = cfg.market_price(item, inv)
+        total += price
+        if price > cfg.PRICE_FLOOR:
+            inv += 1
+    return total
 
 
-def score_crop(crop, prices):
+def score_crop(crop, prices, inventory=None):
     info = cfg.CROPS[crop]
-    price = prices.get(crop, info["base_price"])
+    market_inv = (inventory or {}).get(crop, cfg.MARKET_I0)
     if not info["ongoing"]:
-        gross = price * _price_impact_discount(info["max_yield"]) / max(info["max_yield"], 1)
-        gross *= info["max_yield"]
+        gross = _projected_batch_revenue(crop, market_inv, info["max_yield"])
         profit = gross - info["seed_cost"]
         return profit / max(info["max_yield_day"], 1)
     n_harvests = info["max_yield"]
     total_span = info["first_yield_day"] + (n_harvests - 1) * info["interval"]
-    gross = price * _price_impact_discount(n_harvests)
+    gross = _projected_batch_revenue(crop, market_inv, n_harvests)
     profit = gross - info["seed_cost"]
     return profit / max(total_span, 1)
 
 
-def score_animal(animal, prices):
+def score_animal(animal, prices, inventory=None):
     info = cfg.ANIMALS[animal]
-    price = prices.get(info["product"], info["base_price"])
+    market_inv = (inventory or {}).get(info["product"], cfg.MARKET_I0)
+    price = cfg.market_price(info["product"], market_inv) if inventory else prices.get(info["product"], info["base_price"])
     feed_cost_per_cycle = prices.get("WHEAT", cfg.CROPS["WHEAT"]["base_price"])
     production_value = price * cfg.CARE_MULTIPLIER
     profit = production_value - feed_cost_per_cycle
     return profit / max(info["interval"], 1)
 
 
-def rank_crops(prices):
-    return sorted(cfg.CROPS, key=lambda c: score_crop(c, prices), reverse=True)
+def rank_crops(prices, inventory=None):
+    return sorted(cfg.CROPS, key=lambda c: score_crop(c, prices, inventory), reverse=True)
 
 
-def rank_animals(prices):
-    return sorted(cfg.ANIMALS, key=lambda a: score_animal(a, prices), reverse=True)
+def rank_animals(prices, inventory=None):
+    return sorted(cfg.ANIMALS, key=lambda a: score_animal(a, prices, inventory), reverse=True)
 
 
 # --------------------------------------------------------------------------
@@ -148,10 +167,36 @@ def is_clone_like(me, opp):
     return similarity >= cfg.CLONE_SIMILARITY_THRESHOLD and money_ratio >= cfg.CLONE_SIMILARITY_THRESHOLD
 
 
-def build_sell_orders(shed, prices, phase, clone_like):
+def _max_batch_within_impact(item, market_inventory, available_qty):
+    """How many units of `item` can be sold in one order, starting from
+    `market_inventory`, before the price would drop below
+    MAX_SELL_PRICE_IMPACT_FRAC of the pre-sale spot price -- simulated
+    unit-by-unit with the real formula, same idea as
+    _projected_batch_revenue above."""
+    if available_qty <= 0:
+        return 0
+    spot = cfg.market_price(item, market_inventory)
+    floor_price = spot * (1 - cfg.MAX_SELL_PRICE_IMPACT_FRAC)
+    inv = market_inventory
+    n = 0
+    while n < available_qty:
+        price = cfg.market_price(item, inv)
+        if n > 0 and price < floor_price:
+            break
+        n += 1
+        if price > cfg.PRICE_FLOOR:
+            inv += 1
+    return n
+
+
+def build_sell_orders(shed, prices, phase, clone_like, inventory=None):
     """Sells ordered by current price (best first). Holds premium goods off
-    the market when their price has crashed, unless we're liquidating (Cash
-    phase) or racing a clone (clone_like)."""
+    the market entirely when their price has already crashed hard, unless
+    we're liquidating (Cash phase) or racing a clone (clone_like).
+    Otherwise caps each item's batch size (via the real price formula, see
+    _max_batch_within_impact) so a single turn's sale doesn't crash its own
+    price more than MAX_SELL_PRICE_IMPACT_FRAC -- the held-back remainder
+    just carries over to a later turn's SELL order."""
     premium = {"STRAWBERRY", "MELON", "MILK", "WOOL"}
     items = [(item, qty) for item, qty in shed.items() if qty > 0 and item in cfg.PRODUCTS]
     items.sort(key=lambda kv: prices.get(kv[0], 0), reverse=True)
@@ -170,7 +215,13 @@ def build_sell_orders(shed, prices, phase, clone_like):
         )
         if should_hold:
             continue
-        orders.append(["SELL", item, qty])
+
+        if phase == "CASH" or clone_like or not inventory:
+            sell_qty = qty
+        else:
+            sell_qty = _max_batch_within_impact(item, inventory.get(item, cfg.MARKET_I0), qty)
+        if sell_qty > 0:
+            orders.append(["SELL", item, sell_qty])
     return orders
 
 
@@ -521,6 +572,7 @@ def agent(obs):
     private = obs["private"]
     market = obs["market"]
     prices = market.get("prices", {})
+    inventory = market.get("inventory", {})
     seeds = private.get("seeds", {})
     shed = private.get("shed", {})
     inventories = private.get("inventories", [{}])
@@ -528,8 +580,8 @@ def agent(obs):
     phase = cfg.get_phase(day)
     clone_like = is_clone_like(me, opp)
 
-    crop_ranking = rank_crops(prices)
-    animal_ranking = rank_animals(prices)
+    crop_ranking = rank_crops(prices, inventory)
+    animal_ranking = rank_animals(prices, inventory)
     target_crop = crop_ranking[0] if crop_ranking else None
     target_animal = animal_ranking[0] if animal_ranking else None
 
@@ -559,7 +611,7 @@ def agent(obs):
             )
         )
 
-    sells = build_sell_orders(shed, prices, phase, clone_like)
+    sells = build_sell_orders(shed, prices, phase, clone_like, inventory)
     buys = build_buy_orders(me, shed, seeds, phase, prices, target_crop, target_animal, len(sells))
     market_orders = (sells + buys)[: cfg.MAX_MARKET_ORDERS_PER_TURN]
 
