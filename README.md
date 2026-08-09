@@ -2,11 +2,19 @@
 
 Bot para a competição Kaggle [Kaggriculture](https://www.kaggle.com/competitions/kaggriculture): uma simulação de fazenda em turnos onde dois jogadores competem, ao longo de uma temporada de 30 dias (720 turnos), pra terminar com mais dinheiro no banco. O ranking geral da competição é por skill rating (estilo Elo/Bradley-Terry) calculado ao longo de várias partidas — não por uma métrica de submissão única. Prêmios: $50.000 no total, 10 posições de $5.000.
 
-**Status: em desenvolvimento, não submetido ainda.**
+**Status: submetido e ativo no leaderboard.**
 
 ## Abordagem
 
-O agente combina uma rota de temporada em 5 fases (Bootstrap → Expand → Rotate & Compound → Protect Value → Cash) com decisões sensíveis ao mercado em tempo real — o que plantar/criar e a ordem de venda são decididos a cada turno a partir dos preços atuais, não hardcoded. Ver [CLAUDE.md](./CLAUDE.md) para as regras completas do jogo e o raciocínio de design, e [PROGRESS.md](./PROGRESS.md) para o histórico de iteração e resultados de teste.
+O agente combina uma rota de temporada em 5 fases (Bootstrap → Expand → Rotate & Compound → Protect Value → Cash) com decisões sensíveis ao mercado em tempo real — o que plantar/criar e a ordem de venda são decididos a cada turno a partir dos preços de mercado atuais (incluindo a fórmula de precificação exata do motor do jogo), não hardcoded.
+
+### Estrutura do projeto
+
+- `main.py` — arquivo único de submissão (gerado a partir de `src/`, ver `scripts/build_submission.py`)
+- `src/agent.py` — lógica do agente
+- `src/config.py` — tabela de economia do jogo e constantes ajustáveis
+- `src/simulate.py` — harness de teste local contra agentes de referência
+- `tests/` — testes unitários das funções de decisão
 
 ## Como rodar localmente
 
