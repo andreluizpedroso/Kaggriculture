@@ -135,7 +135,7 @@ def test_sell_before_buy_ordering_and_cap():
     sells = build_sell_orders(shed, prices, phase="ROTATE_AND_COMPOUND", clone_like=False)
 
     me = {"money": 5000, "tiles": [[None] * 10 for _ in range(10)], "unlocked_quadrants": ["NW"], "hires_today": 0}
-    buys = build_buy_orders(me, {}, {"WHEAT": 0}, "ROTATE_AND_COMPOUND", prices, "WHEAT", "GOOSE", len(sells))
+    buys = build_buy_orders(me, {}, {"WHEAT": 0}, "ROTATE_AND_COMPOUND", prices, ["WHEAT"], ["GOOSE"], len(sells))
 
     combined = (sells + buys)[: cfg.MAX_MARKET_ORDERS_PER_TURN]
     assert len(combined) <= cfg.MAX_MARKET_ORDERS_PER_TURN
@@ -155,12 +155,12 @@ def test_buy_wheat_only_tops_up_shortfall_not_flat_amount():
     prices = {"WHEAT": 25}
     # Shed already has more wheat than the buffer target -- must not buy more.
     shed_full = {"WHEAT": 999}
-    buys = build_buy_orders(me, shed_full, {}, "ROTATE_AND_COMPOUND", prices, None, None, 0)
+    buys = build_buy_orders(me, shed_full, {}, "ROTATE_AND_COMPOUND", prices, [], [], 0)
     assert not any(o[0] == "BUY_PRODUCT" and o[1] == "WHEAT" for o in buys)
 
     # Empty shed -- must buy exactly the buffer shortfall (WHEAT_BUFFER_DAYS per animal, 1 animal).
     shed_empty = {"WHEAT": 0}
-    buys2 = build_buy_orders(me, shed_empty, {}, "ROTATE_AND_COMPOUND", prices, None, None, 0)
+    buys2 = build_buy_orders(me, shed_empty, {}, "ROTATE_AND_COMPOUND", prices, [], [], 0)
     wheat_orders = [o for o in buys2 if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"]
     assert len(wheat_orders) == 1
     assert wheat_orders[0][2] == cfg.WHEAT_BUFFER_DAYS
@@ -170,11 +170,11 @@ def test_buy_animal_skipped_while_one_sits_unplaced_in_shed():
     me = {"money": 5000, "tiles": [[None] * 10 for _ in range(10)], "unlocked_quadrants": ["NW"], "hires_today": 0}
     prices = {"GOOSE": 300}
     shed_with_goose = {"GOOSE": 1}
-    buys = build_buy_orders(me, shed_with_goose, {}, "ROTATE_AND_COMPOUND", prices, None, "GOOSE", 0)
+    buys = build_buy_orders(me, shed_with_goose, {}, "ROTATE_AND_COMPOUND", prices, [], ["GOOSE"], 0)
     assert not any(o[0] == "BUY_ANIMAL" for o in buys)
 
     shed_empty = {}
-    buys2 = build_buy_orders(me, shed_empty, {}, "ROTATE_AND_COMPOUND", prices, None, "GOOSE", 0)
+    buys2 = build_buy_orders(me, shed_empty, {}, "ROTATE_AND_COMPOUND", prices, [], ["GOOSE"], 0)
     assert any(o[0] == "BUY_ANIMAL" and o[1] == "GOOSE" for o in buys2)
 
 
@@ -189,8 +189,22 @@ def test_buy_animal_allowed_again_once_previous_one_is_placed():
         "hires_today": 0,
     }
     prices = {"GOOSE": 300}
-    buys = build_buy_orders(me, {}, {}, "ROTATE_AND_COMPOUND", prices, None, "GOOSE", 0)
+    buys = build_buy_orders(me, {}, {}, "ROTATE_AND_COMPOUND", prices, [], ["GOOSE"], 0)
     assert any(o[0] == "BUY_ANIMAL" and o[1] == "GOOSE" for o in buys)
+
+
+def test_buy_animal_rotates_to_next_portfolio_type_once_first_is_capped():
+    # Regression guard for the old MAX_ANIMALS=3-total ceiling: once the
+    # best-scored portfolio animal (GOOSE) has hit MAX_ANIMALS_PER_TYPE, the
+    # agent must keep buying the next-best type (COW) instead of stopping
+    # dead, since each type has its own cap now.
+    geese_tiles = [{"kind": "COOP", "animal": "GOOSE"}] * cfg.MAX_ANIMALS_PER_TYPE
+    tiles = [geese_tiles + [None] * (10 - len(geese_tiles))] + [[None] * 10 for _ in range(9)]
+    me = {"money": 5000, "tiles": tiles, "unlocked_quadrants": ["NW"], "hires_today": 0}
+    prices = {"GOOSE": 300, "COW": 400}
+    buys = build_buy_orders(me, {}, {}, "ROTATE_AND_COMPOUND", prices, [], ["GOOSE", "COW"], 0)
+    assert not any(o[0] == "BUY_ANIMAL" and o[1] == "GOOSE" for o in buys)
+    assert any(o[0] == "BUY_ANIMAL" and o[1] == "COW" for o in buys)
 
 
 def test_get_phase_boundaries():
@@ -200,8 +214,14 @@ def test_get_phase_boundaries():
     boundaries = cfg.PHASE_BOUNDARIES
     for i, (name, start_day) in enumerate(boundaries):
         end_day = boundaries[i + 1][1] - 1 if i + 1 < len(boundaries) else 29
-        assert cfg.get_phase(start_day) == name
+        # A phase whose window is empty (the next phase starts on the same
+        # day -- a legitimate tuning outcome, e.g. optimize_config.py
+        # collapsing PROTECT_VALUE by setting PHASE_CASH_START ==
+        # PHASE_PROTECT_START) never "wins" get_phase() for any day, so
+        # only assert the phase→day mapping for phases that actually cover
+        # at least one day.
         if end_day >= start_day:
+            assert cfg.get_phase(start_day) == name
             assert cfg.get_phase(end_day) == name
 
 

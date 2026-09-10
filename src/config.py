@@ -91,6 +91,17 @@ def market_price(item, inventory):
 LAND_ORDER = ["NE", "SW", "SE"]
 LAND_PRICES = {"NE": 1000, "SW": 2000, "SE": 4000}
 
+# Cap on *additional* quadrants bought beyond the free starting NW.
+# Verified community meta report (PROGRESS.md, "Pesquisa de meta real")
+# found 54% of the 3100+-Elo band deliberately stops at NE+NW+SW and never
+# buys SE -- tried capping this at 2 (skip SE) on 2026-09-10 as an
+# untested guess (not run through optimize_config.py's search) and it
+# measured WORSE against the 3 strong references (-123,627 vs -121,961
+# without the cap) -- reverted. Left at len(LAND_ORDER) (no effective
+# cap, matches pre-2026-09-10 behavior) until this is actually run through
+# the search instead of guessed.
+MAX_LAND_QUADRANTS = 3
+
 # --- Season / phase route -------------------------------------------------
 # `obs["day"]` is 0-indexed (0..29). Boundaries are the first day of each
 # phase. Tuned against the user's 1-indexed "Bootstrap dias 1-3" etc.
@@ -102,9 +113,9 @@ SEASON_DAYS = 30
 PHASE_BOUNDARIES = [
     ("BOOTSTRAP", 0),
     ("EXPAND", 1),
-    ("ROTATE_AND_COMPOUND", 16),
+    ("ROTATE_AND_COMPOUND", 9),
     ("PROTECT_VALUE", 25),
-    ("CASH", 27),
+    ("CASH", 25),
 ]
 
 
@@ -133,26 +144,61 @@ def get_phase(day: int) -> str:
 # search independently converged close to that same value. CARE is always
 # applied when available regardless of this constant (it only affects
 # which animal to buy), so a wrong value here is low-risk to correct later.
-CARE_MULTIPLIER = 4.96039682181482
+CARE_MULTIPLIER = 3.994722922301145
 
 # Max fraction the price of a single item is allowed to drop, within one
 # turn's SELL order, before the rest of that item's shed stock is held
 # back for a later turn -- computed exactly via market_price() (see
 # _max_batch_within_impact in agent.py), not a guessed flat decay anymore.
-MAX_SELL_PRICE_IMPACT_FRAC = 0.15
+MAX_SELL_PRICE_IMPACT_FRAC = 0.3187331394159213
 
 # Clone-preemption: how similar (0..1) self vs. opponent public farm state
 # has to be before we treat the opponent as running the same "recipe" and
 # preempt a planned sale (skip the PROTECT_VALUE hold-for-a-better-price
 # logic in build_sell_orders) instead of waiting.
-CLONE_SIMILARITY_THRESHOLD = 0.531128576014459
+CLONE_SIMILARITY_THRESHOLD = 0.5098490837890597
 
 MAX_MARKET_ORDERS_PER_TURN = 10
 
-# Cap total animals owned (placed + sitting in shed) so the agent doesn't
-# buy more mouths to feed than its current labor/cash can sustain -- an
-# unfed animal that flees after 2 days is a pure loss of its purchase cost.
-MAX_ANIMALS = 3
+# Cap animals owned PER TYPE (placed + sitting in shed) so the agent
+# doesn't buy more mouths to feed than its current labor/cash can sustain --
+# an unfed animal that flees after 2 days is a pure loss of its purchase
+# cost. This used to be a single cap of 3 shared across all animal types
+# (i.e. 3 animals total, ever) -- confirmed via benchmark_references.py to
+# be the single biggest ceiling on late-game income: animals are the only
+# indefinite-duration product in the game, and strong public agents run
+# compositions like 8 cow + 6 sheep (14+ animals), not 3. Raised and
+# reinterpreted as a per-type cap so the agent can build a real animal
+# portfolio instead of stopping at 3 lifetime purchases.
+MAX_ANIMALS_PER_TYPE = 13
+
+# How many distinct animal types to actively target/buy at once (ranked by
+# score_animal, best first) -- diversifying avoids dumping all production
+# of a single product on the market at once and crashing its own price
+# (see MAX_SELL_PRICE_IMPACT_FRAC), and mirrors the multi-animal
+# compositions strong public agents run.
+# TEMPORARILY 0 (animals disabled) as of 2026-09-10 -- see PROGRESS.md
+# "Bug de prioridade de estrutura corrigido, mas expõe problema de
+# economia animal" for the full story. Short version: fixing the
+# structure-building priority bug (animals used to never get placed at
+# all, see below) made things WORSE, not better, once animals actually
+# started working -- isolated testing confirmed animals are net-NEGATIVE
+# value at the current MAX_ANIMALS_PER_TYPE/CARE_MULTIPLIER/etc tuning
+# (-137,604 with a conservative cap of 3, vs -125,693 with animals fully
+# disabled, vs -128,303 the pre-fix/pre-portfolio baseline). Needs real
+# economic re-validation (feed cost vs. CARE_MULTIPLIER vs. opportunity
+# cost of hand-turns spent on animal upkeep vs. crops) before turning
+# animals back on -- not safe to just re-enable with a guessed cap.
+ANIMAL_PORTFOLIO_SIZE = 0
+
+# Same idea for crops: rotate planting across the top-N scored crops
+# instead of monoculture on a single top pick, for the same
+# market-saturation reason. optimize_config.py's search (2026-09-10,
+# post-portfolio-rewrite) converged back to 1 (monoculture) here --
+# unlike animals, diversifying crops did NOT help once other constants
+# were retuned. Kept at 1 on evidence, not reverted back to the
+# hardcoded single-crop design by assumption.
+CROP_PORTFOLIO_SIZE = 1
 
 # Keep this many seeds of the current target crop in stock at once, per
 # unlocked quadrant. Buying only 1 at a time throttled planting to roughly
@@ -160,22 +206,22 @@ MAX_ANIMALS = 3
 # up once land grew to 100 tiles -- most of the farm sat empty for lack of
 # seed backlog. CASH_RESERVE below still stops this from starving
 # hiring/wheat/land.
-SEED_BUFFER_PER_QUADRANT = 4
+SEED_BUFFER_PER_QUADRANT = 8
 
 # Never let an opportunistic purchase (seed top-up, land, a new animal --
 # anything that isn't survival-critical wheat) drop the bank below this,
 # so a run of bad luck doesn't leave the agent unable to react.
-CASH_RESERVE = 321
+CASH_RESERVE = 463
 
 # How many farm hands to keep hired per unlocked quadrant -- land without
 # labor to work it just sits empty and neglected.
-HIRE_PER_QUADRANT = 2.6092207655270654
+HIRE_PER_QUADRANT = 2.088942301542801
 
 # Affordability safety margins: only spend on a non-essential purchase
 # (land, an animal) if the bank has at least this many multiples of the
 # cost left over afterward, so one purchase doesn't strand the agent.
-LAND_AFFORD_MULTIPLIER = 3.9891398646722704
-ANIMAL_AFFORD_MULTIPLIER = 3.6497096039220858
+LAND_AFFORD_MULTIPLIER = 3.864626007706941
+ANIMAL_AFFORD_MULTIPLIER = 4.323711816789951
 
 # Feed buffer target, in days of wheat, kept in the shed per animal owned.
-WHEAT_BUFFER_DAYS = 5
+WHEAT_BUFFER_DAYS = 2

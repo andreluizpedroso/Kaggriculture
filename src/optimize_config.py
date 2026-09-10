@@ -28,7 +28,10 @@ from .agent import agent as agent_fn
 PARAM_SPACE = {
     "SEED_BUFFER_PER_QUADRANT": ("int", 2, 16),
     "CASH_RESERVE": ("int", 0, 500),
-    "MAX_ANIMALS": ("int", 1, 8),
+    "MAX_ANIMALS_PER_TYPE": ("int", 1, 15),
+    "ANIMAL_PORTFOLIO_SIZE": ("int", 1, 3),
+    "CROP_PORTFOLIO_SIZE": ("int", 1, 3),
+    "MAX_LAND_QUADRANTS": ("int", 0, 3),
     "CARE_MULTIPLIER": ("float", 1.0, 6.0),
     "MAX_SELL_PRICE_IMPACT_FRAC": ("float", 0.05, 0.6),
     "CLONE_SIMILARITY_THRESHOLD": ("float", 0.5, 0.99),
@@ -45,7 +48,10 @@ PARAM_SPACE = {
 DEFAULT_PARAMS = {
     "SEED_BUFFER_PER_QUADRANT": 6,
     "CASH_RESERVE": 150,
-    "MAX_ANIMALS": 3,
+    "MAX_ANIMALS_PER_TYPE": 13,
+    "ANIMAL_PORTFOLIO_SIZE": 3,
+    "CROP_PORTFOLIO_SIZE": 1,
+    "MAX_LAND_QUADRANTS": 3,
     "CARE_MULTIPLIER": 4.0,
     "MAX_SELL_PRICE_IMPACT_FRAC": 0.15,
     "CLONE_SIMILARITY_THRESHOLD": 0.85,
@@ -85,7 +91,10 @@ def load_reference_agent(path, module_name):
 def apply_params(params):
     cfg.SEED_BUFFER_PER_QUADRANT = params["SEED_BUFFER_PER_QUADRANT"]
     cfg.CASH_RESERVE = params["CASH_RESERVE"]
-    cfg.MAX_ANIMALS = params["MAX_ANIMALS"]
+    cfg.MAX_ANIMALS_PER_TYPE = params["MAX_ANIMALS_PER_TYPE"]
+    cfg.ANIMAL_PORTFOLIO_SIZE = params["ANIMAL_PORTFOLIO_SIZE"]
+    cfg.CROP_PORTFOLIO_SIZE = params["CROP_PORTFOLIO_SIZE"]
+    cfg.MAX_LAND_QUADRANTS = params["MAX_LAND_QUADRANTS"]
     cfg.CARE_MULTIPLIER = params["CARE_MULTIPLIER"]
     cfg.MAX_SELL_PRICE_IMPACT_FRAC = params["MAX_SELL_PRICE_IMPACT_FRAC"]
     cfg.CLONE_SIMILARITY_THRESHOLD = params["CLONE_SIMILARITY_THRESHOLD"]
