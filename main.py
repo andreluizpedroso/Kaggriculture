@@ -137,12 +137,12 @@ def get_phase(day: int) -> str:
 # (why it exists, what it protects against) is kept below; only the
 # numbers changed.
 
-# Community analysis claims CARE can multiply animal yield by ~4x; still
-# unverified against the current (post-balance-change) engine, but the
-# search independently converged close to that same value. CARE is always
-# applied when available regardless of this constant (it only affects
-# which animal to buy), so a wrong value here is low-risk to correct later.
-CARE_MULTIPLIER = 3.994722922301145
+# CARE_MULTIPLIER removed 2026-09-10: was a guessed flat ~4x constant
+# ("community claim", never verified against the real engine). Replaced
+# in agent.py::score_animal by a value derived from the documented CARE
+# mechanic (1 + interval, see PROGRESS.md "animal economics"
+# investigation) -- animal yield no longer needs a tunable multiplier at
+# all, it's computed directly from each animal's `interval`.
 
 # Max fraction the price of a single item is allowed to drop, within one
 # turn's SELL order, before the rest of that item's shed stock is held
@@ -333,10 +333,26 @@ def score_animal(animal, prices, inventory=None):
     info = ANIMALS[animal]
     market_inv = (inventory or {}).get(info["product"], MARKET_I0)
     price = market_price(info["product"], market_inv) if inventory else prices.get(info["product"], info["base_price"])
-    feed_cost_per_cycle = prices.get("WHEAT", CROPS["WHEAT"]["base_price"])
-    production_value = price * CARE_MULTIPLIER
+    wheat_price = prices.get("WHEAT", CROPS["WHEAT"]["base_price"])
+    interval = max(info["interval"], 1)
+    # Yield multiplier derived from the documented CARE mechanic (CLAUDE.md):
+    # pending_care_bonus gains +1 per day fed+cared since the last
+    # production, paid out alongside the 1 base unit at the next scheduled
+    # production, then resets. So max yield per cycle (perfect daily
+    # feed+care) is 1 base + up to `interval` bonus units -- NOT a flat
+    # guessed multiplier (the previous CARE_MULTIPLIER~=4 constant was an
+    # unverified "community claim", never checked against the real
+    # mechanic -- see PROGRESS.md "animal economics" investigation,
+    # 2026-09-10, for why this mattered: it silently overvalued every
+    # animal type equally, driving systematic overinvestment).
+    production_value = price * (1 + interval)
+    # Feed cost is also per CYCLE, not a flat one-time amount: an animal
+    # eats WHEAT every day it's alive, not just once per production --
+    # the previous formula charged only 1 day's wheat regardless of how
+    # long `interval` was, understating the true cost for SHEEP/COW.
+    feed_cost_per_cycle = wheat_price * interval
     profit = production_value - feed_cost_per_cycle
-    return profit / max(info["interval"], 1)
+    return profit / interval
 
 
 def rank_crops(prices, inventory=None):

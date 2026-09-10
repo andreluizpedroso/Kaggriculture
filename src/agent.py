@@ -108,10 +108,26 @@ def score_animal(animal, prices, inventory=None):
     info = cfg.ANIMALS[animal]
     market_inv = (inventory or {}).get(info["product"], cfg.MARKET_I0)
     price = cfg.market_price(info["product"], market_inv) if inventory else prices.get(info["product"], info["base_price"])
-    feed_cost_per_cycle = prices.get("WHEAT", cfg.CROPS["WHEAT"]["base_price"])
-    production_value = price * cfg.CARE_MULTIPLIER
+    wheat_price = prices.get("WHEAT", cfg.CROPS["WHEAT"]["base_price"])
+    interval = max(info["interval"], 1)
+    # Yield multiplier derived from the documented CARE mechanic (CLAUDE.md):
+    # pending_care_bonus gains +1 per day fed+cared since the last
+    # production, paid out alongside the 1 base unit at the next scheduled
+    # production, then resets. So max yield per cycle (perfect daily
+    # feed+care) is 1 base + up to `interval` bonus units -- NOT a flat
+    # guessed multiplier (the previous CARE_MULTIPLIER~=4 constant was an
+    # unverified "community claim", never checked against the real
+    # mechanic -- see PROGRESS.md "animal economics" investigation,
+    # 2026-09-10, for why this mattered: it silently overvalued every
+    # animal type equally, driving systematic overinvestment).
+    production_value = price * (1 + interval)
+    # Feed cost is also per CYCLE, not a flat one-time amount: an animal
+    # eats WHEAT every day it's alive, not just once per production --
+    # the previous formula charged only 1 day's wheat regardless of how
+    # long `interval` was, understating the true cost for SHEEP/COW.
+    feed_cost_per_cycle = wheat_price * interval
     profit = production_value - feed_cost_per_cycle
-    return profit / max(info["interval"], 1)
+    return profit / interval
 
 
 def rank_crops(prices, inventory=None):

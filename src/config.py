@@ -139,12 +139,12 @@ def get_phase(day: int) -> str:
 # (why it exists, what it protects against) is kept below; only the
 # numbers changed.
 
-# Community analysis claims CARE can multiply animal yield by ~4x; still
-# unverified against the current (post-balance-change) engine, but the
-# search independently converged close to that same value. CARE is always
-# applied when available regardless of this constant (it only affects
-# which animal to buy), so a wrong value here is low-risk to correct later.
-CARE_MULTIPLIER = 3.994722922301145
+# CARE_MULTIPLIER removed 2026-09-10: was a guessed flat ~4x constant
+# ("community claim", never verified against the real engine). Replaced
+# in agent.py::score_animal by a value derived from the documented CARE
+# mechanic (1 + interval, see PROGRESS.md "animal economics"
+# investigation) -- animal yield no longer needs a tunable multiplier at
+# all, it's computed directly from each animal's `interval`.
 
 # Max fraction the price of a single item is allowed to drop, within one
 # turn's SELL order, before the rest of that item's shed stock is held
